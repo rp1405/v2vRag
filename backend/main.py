@@ -4,8 +4,10 @@ from pydantic import BaseModel
 import os
 from dotenv import load_dotenv
 from services.ragService import RAGService
+from services.elevenLabsService import ElevenLabsService
 from fastapi import WebSocket
 import json
+import base64
 load_dotenv()
 
 app = FastAPI()
@@ -19,6 +21,13 @@ app.add_middleware(
 )
 
 rag_service = RAGService()
+eleven_labs_service = ElevenLabsService()
+
+@app.post("/transcribe")
+async def transcribe_audio(file: UploadFile = File(...)):
+    audio_data = await file.read()
+    text = eleven_labs_service.stream_speech_to_text(audio_data)
+    return {"text": text}
 
 @app.post("/upload")
 async def upload_file(file: UploadFile = File(...), user_prompt: str = ""):
@@ -54,6 +63,29 @@ async def websocket_endpoint(websocket: WebSocket):
             
             # Stream response back to client
             async for text_chunk, audio_chunk in rag_service.query_document_stream_async(query):
+                # Send text chunk
+                await websocket.send_text(text_chunk)
+                
+                # Send audio chunk
+                await websocket.send_bytes(audio_chunk)
+                
+    except Exception as e:
+        print(f"WebSocket error: {str(e)}")
+    finally:
+        await websocket.close()
+
+@app.websocket("/ws/audio-query")
+async def websocket_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    
+    try:
+        while True:
+            # Receive query from client
+            query = await websocket.receive_text()
+            audio_data = base64.b64decode(query)
+            text_query=eleven_labs_service.stream_speech_to_text(audio_data)
+            # Stream response back to client
+            async for text_chunk, audio_chunk in rag_service.query_document_stream_async(text_query):
                 # Send text chunk
                 await websocket.send_text(text_chunk)
                 

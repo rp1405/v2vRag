@@ -5,6 +5,8 @@ import websockets
 import requests
 from typing import Generator, Optional, AsyncGenerator
 from dotenv import load_dotenv
+import urllib3
+import certifi
 
 load_dotenv()
 
@@ -22,6 +24,15 @@ class ElevenLabsService:
             raise ValueError("ELEVENLABS_API_KEY environment variable is not set")
         if not self.voice_id:
             raise ValueError("ELEVENLABS_VOICE_ID environment variable is not set")
+            
+        # Configure requests session with proper SSL settings
+        self.session = requests.Session()
+        self.session.verify = certifi.where()
+        self.session.headers.update({
+            "xi-api-key": self.api_key,
+            "Accept": "audio/mpeg",
+            "Content-Type": "application/json"
+        })
 
     async def stream_text_to_speech_websocket(
         self,
@@ -104,12 +115,6 @@ class ElevenLabsService:
         """
         url = f"{self.base_url}/text-to-speech/{voice_id or self.voice_id}"
         
-        headers = {
-            "Accept": "audio/mpeg",
-            "Content-Type": "application/json",
-            "xi-api-key": self.api_key
-        }
-        
         data = {
             "text": text,
             "model_id": self.model_id,
@@ -121,7 +126,7 @@ class ElevenLabsService:
         }
         
         try:
-            response = requests.post(url, json=data, headers=headers, stream=True)
+            response = self.session.post(url, json=data, stream=True)
             response.raise_for_status()
             
             for chunk in response.iter_content(chunk_size=1024):
@@ -139,11 +144,49 @@ class ElevenLabsService:
             list: List of available voices
         """
         url = f"{self.base_url}/voices"
-        headers = {"xi-api-key": self.api_key}
         
         try:
-            response = requests.get(url, headers=headers)
+            response = self.session.get(url)
             response.raise_for_status()
             return response.json()["voices"]
         except requests.exceptions.RequestException as e:
             raise Exception(f"Error getting voices from ElevenLabs: {str(e)}")
+        
+    def stream_speech_to_text(self, audio: bytes) -> str:
+        """
+        Convert speech to text using ElevenLabs API.
+        
+        Args:
+            audio (bytes): The audio data to convert
+            
+        Returns:
+            str: The transcribed text
+        """
+        url = f"{self.base_url}/speech-to-text"
+        
+        try:
+            # Create a new session for this request
+            session = requests.Session()
+            session.verify = certifi.where()
+            session.headers.update({
+                "xi-api-key": self.api_key
+            })
+            
+            # Prepare the multipart form data
+            files = {
+                'file': ('audio.wav', audio, 'audio/wav')
+            }
+            data = {
+                'model_id': 'scribe_v1'  # or your preferred model
+            }
+            
+            response = session.post(url, files=files, data=data)
+            response.raise_for_status()
+            return response.json()["text"]
+            
+        except requests.exceptions.RequestException as e:
+            raise Exception(f"Error converting speech to text: {str(e)}")
+        except KeyError as e:
+            raise Exception(f"Unexpected response format from ElevenLabs: {str(e)}")
+        except Exception as e:
+            raise Exception(f"Unknown error in speech to text conversion: {str(e)}")
