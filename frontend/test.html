@@ -114,7 +114,9 @@
 
       // Initialize WebSocket connection
       function initWebSocket() {
-        ws = new WebSocket("ws://localhost:8000/ws/audio-query");
+        ws = new WebSocket(
+          process.env.WEBSOCKET_URL || "ws://localhost:8000/ws/audio-query"
+        );
 
         ws.onopen = () => {
           console.log("WebSocket connected");
