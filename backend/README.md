@@ -21,6 +21,8 @@ pip install -r requirements.txt
 
 ```
 OPENAI_API_KEY=your_api_key_here
+ELEVENLABS_API_KEY=your_api_key_here
+ELEVENLABS_VOICE_ID=your_api_key_here
 ```
 
 ## Running the Server
