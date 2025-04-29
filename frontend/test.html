@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Audio Chat Interface</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        max-width: 800px;
+        margin: 0 auto;
+        padding: 20px;
+      }
+      .container {
+        display: flex;
+        flex-direction: column;
+        gap: 20px;
+      }
+      .controls {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+      }
+      button {
+        padding: 10px 20px;
+        border: none;
+        border-radius: 5px;
+        background-color: #007bff;
+        color: white;
+        cursor: pointer;
+      }
+      button:disabled {
+        background-color: #cccccc;
+      }
+      button.recording {
+        background-color: #dc3545;
+      }
+      .response-container {
+        border: 1px solid #ddd;
+        padding: 20px;
+        border-radius: 5px;
+        min-height: 200px;
+      }
+      .status {
+        color: #666;
+        font-style: italic;
+      }
+      .upload-section {
+        margin-bottom: 30px;
+        padding: 20px;
+        border: 1px solid #ddd;
+        border-radius: 5px;
+      }
+      .upload-controls {
+        display: flex;
+        flex-direction: column;
+        gap: 15px;
+      }
+      #userPrompt {
+        width: 100%;
+        min-height: 100px;
+        padding: 10px;
+        border: 1px solid #ddd;
+        border-radius: 5px;
+        resize: vertical;
+      }
+      .audio-section {
+        margin-bottom: 30px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>Audio Chat Interface</h1>
+
+      <!-- File Upload Section -->
+      <div class="upload-section">
+        <h2>Upload Document</h2>
+        <div class="upload-controls">
+          <input type="file" id="fileInput" accept=".pdf,.doc,.docx,.txt" />
+          <textarea
+            id="userPrompt"
+            placeholder="Enter any specific instructions or context for the document..."
+          ></textarea>
+          <button id="uploadButton">Upload Document</button>
+        </div>
+        <div id="uploadStatus" class="status"></div>
+      </div>
+
+      <!-- Audio Recording Section -->
+      <div class="audio-section">
+        <h2>Audio Chat</h2>
+        <div class="controls">
+          <button id="recordButton">Start Recording</button>
+          <span id="status" class="status">Ready to record</span>
+        </div>
+      </div>
+
+      <div class="response-container">
+        <h2>Response:</h2>
+        <div id="responseText"></div>
+      </div>
+    </div>
+
+    <script>
+      let mediaRecorder;
+      let audioChunks = [];
+      let ws;
+      let isRecording = false;
+
+      let audioContext;
+      let audioQueue = [];
+      let isPlaying = false;
+
+      // Initialize WebSocket connection
+      function initWebSocket() {
+        ws = new WebSocket("ws://localhost:8000/ws/audio-query");
+
+        ws.onopen = () => {
+          console.log("WebSocket connected");
+          document.getElementById("status").textContent = "Connected";
+        };
+
+        ws.onmessage = async (event) => {
+          if (event.data instanceof Blob) {
+            // Handle audio response
+            const audioBlob = event.data;
+            const arrayBuffer = await audioBlob.arrayBuffer();
+            audioQueue.push(arrayBuffer);
+
+            if (!isPlaying) {
+              playNextChunk();
+            }
+          } else {
+            // Handle text response
+            const responseText = document.getElementById("responseText");
+            responseText.textContent += event.data;
+          }
+        };
+
+        ws.onerror = (error) => {
+          console.error("WebSocket error:", error);
+          document.getElementById("status").textContent = "Connection error";
+        };
+
+        ws.onclose = () => {
+          console.log("WebSocket disconnected");
+          document.getElementById("status").textContent = "Disconnected";
+        };
+      }
+
+      // Initialize audio recording
+      async function initRecording() {
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({
+            audio: true,
+          });
+          mediaRecorder = new MediaRecorder(stream);
+
+          mediaRecorder.ondataavailable = (event) => {
+            audioChunks.push(event.data);
+          };
+
+          mediaRecorder.onstop = async () => {
+            const audioBlob = new Blob(audioChunks, { type: "audio/wav" });
+            const reader = new FileReader();
+            reader.readAsDataURL(audioBlob);
+            reader.onloadend = () => {
+              const base64Audio = reader.result.split(",")[1];
+              if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(base64Audio);
+              }
+            };
+            audioChunks = [];
+          };
+        } catch (error) {
+          console.error("Error accessing microphone:", error);
+          document.getElementById("status").textContent =
+            "Error accessing microphone";
+        }
+      }
+
+      // Toggle recording
+      async function toggleRecording() {
+        const recordButton = document.getElementById("recordButton");
+
+        if (!isRecording) {
+          if (!mediaRecorder) {
+            await initRecording();
+          }
+          mediaRecorder.start();
+          recordButton.textContent = "Stop Recording";
+          recordButton.classList.add("recording");
+          document.getElementById("status").textContent = "Recording...";
+          document.getElementById("responseText").textContent = "";
+        } else {
+          mediaRecorder.stop();
+          recordButton.textContent = "Start Recording";
+          recordButton.classList.remove("recording");
+          document.getElementById("status").textContent = "Processing...";
+        }
+
+        isRecording = !isRecording;
+      }
+
+      async function playNextChunk() {
+        if (audioQueue.length === 0) {
+          isPlaying = false;
+          return;
+        }
+
+        isPlaying = true;
+        const chunk = audioQueue.shift();
+
+        if (!audioContext) {
+          audioContext = new (window.AudioContext ||
+            window.webkitAudioContext)();
+        }
+
+        try {
+          const audioBuffer = await audioContext.decodeAudioData(chunk);
+          const source = audioContext.createBufferSource();
+          source.buffer = audioBuffer;
+          source.connect(audioContext.destination);
+          source.onended = () => {
+            playNextChunk();
+          };
+          source.start(0);
+        } catch (error) {
+          console.error("Error playing audio chunk:", error);
+          playNextChunk();
+        }
+      }
+
+      // Initialize the application
+      document.addEventListener("DOMContentLoaded", () => {
+        initWebSocket();
+        document
+          .getElementById("recordButton")
+          .addEventListener("click", toggleRecording);
+      });
+
+      // File Upload Handling
+      document
+        .getElementById("uploadButton")
+        .addEventListener("click", async () => {
+          const fileInput = document.getElementById("fileInput");
+          const userPrompt = document.getElementById("userPrompt").value;
+          const uploadStatus = document.getElementById("uploadStatus");
+
+          if (!fileInput.files.length) {
+            uploadStatus.textContent = "Please select a file first";
+            return;
+          }
+
+          const file = fileInput.files[0];
+          const formData = new FormData();
+          formData.append("file", file);
+          formData.append("user_prompt", userPrompt);
+
+          try {
+            uploadStatus.textContent = "Uploading...";
+            const response = await fetch("http://localhost:8000/upload", {
+              method: "POST",
+              body: formData,
+            });
+
+            if (!response.ok) {
+              throw new Error(`HTTP error! status: ${response.status}`);
+            }
+
+            const result = await response.json();
+            uploadStatus.textContent = "Upload successful!";
+            console.log("Upload result:", result);
+          } catch (error) {
+            console.error("Upload error:", error);
+            uploadStatus.textContent = "Upload failed: " + error.message;
+          }
+        });
+    </script>
+  </body>
+</html>
