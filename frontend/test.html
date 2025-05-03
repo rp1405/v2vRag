@@ -114,8 +114,8 @@
 
       // Initialize WebSocket connection
       function initWebSocket() {
-        ws = new WebSocket("wss://v2vrag.onrender.com/ws/audio-query");
-
+        // ws = new WebSocket("wss://v2vrag.onrender.com/ws/audio-query");
+        ws = new WebSocket("ws://localhost:8000/ws/audio-query");
         ws.onopen = () => {
           console.log("WebSocket connected");
           document.getElementById("status").textContent = "Connected";
@@ -260,11 +260,14 @@
 
           try {
             uploadStatus.textContent = "Uploading...";
-            const response = await fetch("https://v2vrag.onrender.com/upload", {
+            // const response = await fetch("https://v2vrag.onrender.com/upload", {
+            //   method: "POST",
+            //   body: formData,
+            // });
+            const response = await fetch("http://localhost:8000/upload", {
               method: "POST",
               body: formData,
             });
-
             if (!response.ok) {
               throw new Error(`HTTP error! status: ${response.status}`);
             }
