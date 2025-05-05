@@ -13,6 +13,9 @@ from services.embeddingsFactory import EmbeddingsFactory
 from services.llmFactory import LLMFactory
 from contextlib import contextmanager
 from prompts.rag_system_prompt import SystemPrompt
+from loguru import logger
+import time
+from services.namedEntityService import NamedEntityService
 
 
 class DocumentContext:
@@ -33,6 +36,19 @@ class RAGService:
         self.eleven_labs = ElevenLabsService()
         self.chunk_size = chunk_size
         self.model_name = llm
+        self.ner_service = NamedEntityService()
+        self.chunks = []
+
+    def _fix_leading_punctuation(self, chunks):
+        fixed_chunks = []
+        for chunk in chunks:
+            if fixed_chunks and chunk and chunk[0] in ".!?":
+                # Move punctuation to end of previous chunk
+                fixed_chunks[-1] += chunk[0]
+                chunk = chunk[1:]
+            chunk = chunk.strip()
+            fixed_chunks.append(chunk)
+        return fixed_chunks
 
     @contextmanager
     def _safe_file_handle(self, file_content: bytes) -> Generator[BinaryIO, None, None]:
@@ -60,6 +76,10 @@ class RAGService:
     ) -> None:
         """Process a file and create vector store with proper error handling."""
         try:
+            # Clean up any existing vector store
+            if self.vector_store:
+                self.vector_store = None
+
             if filename.lower().endswith(".pdf"):
                 content = self.extract_text_from_pdf(file_content)
             else:
@@ -70,23 +90,36 @@ class RAGService:
                     content = file_content.decode(encoding)
                 except UnicodeDecodeError:
                     content = file_content.decode("latin-1")
+            self.generate_vector_store(content, filename, user_prompt)
+        except Exception as e:
+            raise ValueError(f"Failed to process file {filename}: {str(e)}")
 
+    def generate_vector_store(
+        self, content: str, filename: str = "default", user_prompt: str = ""
+    ) -> None:
+        try:
             text_splitter = RecursiveCharacterTextSplitter(
-                chunk_size=300,
-                chunk_overlap=50,
+                chunk_size=1000,
+                chunk_overlap=100,
                 length_function=len,
+                separators=["\n\n", "\n", ".", "?", "!"],
             )
             chunks = text_splitter.split_text(content)
-
+            chunks = self._fix_leading_punctuation(chunks)
+            self.chunks = chunks
+            logger.info(f"Using embedding: {self.embeddings}")
+            # Create a new vector store with a unique collection name
+            collection_name = f"doc_{filename}_{int(time.time())}"
             self.vector_store = Chroma.from_texts(
                 chunks,
                 self.embeddings,
                 metadatas=[{"source": filename} for _ in chunks],
+                collection_name=collection_name,
             )
 
             self.user_prompt = user_prompt
         except Exception as e:
-            raise ValueError(f"Failed to process file {filename}: {str(e)}")
+            raise ValueError(f"Failed to generate vector store: {str(e)}")
 
     def generate_query(self, query: str) -> str:
         """Generate a query with proper error handling."""
@@ -97,9 +130,13 @@ class RAGService:
 
         try:
             # Get relevant documents
-            docs = self.vector_store.similarity_search(query, k=4)
-            # Build context from documents
-            context = "\n\n".join([doc.page_content for doc in docs])
+            similarity_docs = self.vector_store.similarity_search(query, k=4)
+            context = "\n\n".join([doc.page_content for doc in similarity_docs])
+
+            keyword_docs, keyword_scores = self.ner_service.search_chunks_for_entities(
+                query, self.chunks, k=4
+            )
+            context = context + "\n\n" + "\n\n".join(keyword_docs)
 
             prev_context_text = ""
             for document in self.context:
@@ -110,7 +147,7 @@ class RAGService:
             prompt = self.system_prompt.get_prompt(
                 query, prev_context_text, context, self.user_prompt
             )
-            print(prompt)
+            logger.info(f"Prompt: {prompt}")
             return prompt
         except Exception as e:
             raise ValueError(f"Failed to generate query: {str(e)}")

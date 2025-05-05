@@ -11,6 +11,8 @@ import base64
 from services.llms.LlamaChat import LlamaChat
 import uuid
 from datetime import datetime, timedelta
+from loguru import logger
+from services.scraper import WebScraper
 
 load_dotenv()
 
@@ -25,9 +27,9 @@ app.add_middleware(
 )
 
 # Dictionary to store RAG services for different sessions
-rag_services = {}
+rag_services: dict[str, RAGService] = {}
 # Dictionary to store session expiration times
-session_expirations = {}
+session_expirations: dict[str, datetime] = {}
 # Session timeout in hours
 SESSION_TIMEOUT = 24
 
@@ -78,6 +80,44 @@ async def upload_file(
         file_content = await file.read()
         rag_services[session_id].process_file(file_content, file.filename, user_prompt)
         return {"message": "File processed successfully", "session_id": session_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class ScrapeRequest(BaseModel):
+    url: str
+    embeddings: str
+    model: str
+    user_prompt: str = ""
+
+
+@app.post("/scrape")
+async def scrape_url(body: ScrapeRequest):
+    try:
+        scraper = WebScraper(body.url)
+        scraper.scrape()
+        final_text = scraper.get_final_text()
+
+        # Generate a unique session ID
+        session_id = str(uuid.uuid4())
+
+        # Create new RAG service for this session
+        rag_services[session_id] = RAGService(
+            embeddings=body.embeddings, llm=body.model
+        )
+
+        # Set session expiration
+        session_expirations[session_id] = datetime.now() + timedelta(
+            hours=SESSION_TIMEOUT
+        )
+
+        rag_services[session_id].generate_vector_store(final_text)
+
+        return {
+            "message": "Scraped successfully",
+            "generated_prompt": final_text,
+            "session_id": session_id,
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -142,7 +182,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 await websocket.send_bytes(audio_chunk)
 
     except Exception as e:
-        print(f"WebSocket error: {str(e)}")
+        logger.error(f"WebSocket error: {str(e)}")
     finally:
         await websocket.close()
 
@@ -182,7 +222,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 await websocket.send_bytes(audio_chunk)
 
     except Exception as e:
-        print(f"WebSocket error: {str(e)}")
+        logger.error(f"WebSocket error: {str(e)}")
     finally:
         await websocket.close()
 
