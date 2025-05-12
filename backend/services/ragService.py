@@ -16,6 +16,7 @@ from prompts.rag_system_prompt import SystemPrompt
 from loguru import logger
 import time
 from services.namedEntityService import NamedEntityService
+from datetime import datetime
 
 
 class DocumentContext:
@@ -90,13 +91,12 @@ class RAGService:
                     content = file_content.decode(encoding)
                 except UnicodeDecodeError:
                     content = file_content.decode("latin-1")
-            self.generate_vector_store(content, filename, user_prompt)
+            self.user_prompt = user_prompt
+            self.generate_vector_store(content, filename)
         except Exception as e:
             raise ValueError(f"Failed to process file {filename}: {str(e)}")
 
-    def generate_vector_store(
-        self, content: str, filename: str = "default", user_prompt: str = ""
-    ) -> None:
+    def generate_vector_store(self, content: str, filename: str = "default") -> None:
         try:
             text_splitter = RecursiveCharacterTextSplitter(
                 chunk_size=1000,
@@ -109,15 +109,19 @@ class RAGService:
             self.chunks = chunks
             logger.info(f"Using embedding: {self.embeddings}")
             # Create a new vector store with a unique collection name
-            collection_name = f"doc_{filename}_{int(time.time())}"
+            collection_name = f"doc_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
             self.vector_store = Chroma.from_texts(
                 chunks,
                 self.embeddings,
-                metadatas=[{"source": filename} for _ in chunks],
+                metadatas=[
+                    {
+                        "source": filename,
+                        "created_at": datetime.now().strftime("%Y%m%d_%H%M%S"),
+                    }
+                    for _ in chunks
+                ],
                 collection_name=collection_name,
             )
-
-            self.user_prompt = user_prompt
         except Exception as e:
             raise ValueError(f"Failed to generate vector store: {str(e)}")
 
@@ -130,13 +134,16 @@ class RAGService:
 
         try:
             # Get relevant documents
-            similarity_docs = self.vector_store.similarity_search(query, k=4)
-            context = "\n\n".join([doc.page_content for doc in similarity_docs])
+            similarity_docs = [
+                doc.page_content
+                for doc in self.vector_store.similarity_search(query, k=4)
+            ]
 
             keyword_docs, keyword_scores = self.ner_service.search_chunks_for_entities(
                 query, self.chunks, k=4
             )
-            context = context + "\n\n" + "\n\n".join(keyword_docs)
+
+            context = similarity_docs + keyword_docs
 
             prev_context_text = ""
             for document in self.context:
@@ -145,7 +152,7 @@ class RAGService:
                 )
 
             prompt = self.system_prompt.get_prompt(
-                query, prev_context_text, context, self.user_prompt
+                query, prev_context_text, context, self.user_prompt, style="fid"
             )
             logger.info(f"Prompt: {prompt}")
             return prompt

@@ -56,6 +56,16 @@
         flex-direction: column;
         gap: 15px;
       }
+      .model-selection {
+        display: flex;
+        gap: 20px;
+        margin-bottom: 10px;
+      }
+      .model-selection select {
+        padding: 8px;
+        border-radius: 5px;
+        border: 1px solid #ddd;
+      }
       #userPrompt {
         width: 100%;
         min-height: 100px;
@@ -77,6 +87,22 @@
       <div class="upload-section">
         <h2>Upload Document</h2>
         <div class="upload-controls">
+          <div class="model-selection">
+            <div>
+              <label for="modelSelect">Model:</label>
+              <select id="modelSelect">
+                <option value="openai">OpenAI</option>
+                <option value="llama">Llama</option>
+              </select>
+            </div>
+            <div>
+              <label for="embeddingSelect">Embeddings:</label>
+              <select id="embeddingSelect">
+                <option value="bge">BGE</option>
+                <option value="openai">OpenAI</option>
+              </select>
+            </div>
+          </div>
           <input type="file" id="fileInput" accept=".pdf,.doc,.docx,.txt" />
           <textarea
             id="userPrompt"
@@ -107,6 +133,7 @@
       let audioChunks = [];
       let ws;
       let isRecording = false;
+      let currentSessionId = null;
 
       let audioContext;
       let audioQueue = [];
@@ -114,6 +141,12 @@
 
       // Initialize WebSocket connection
       function initWebSocket() {
+        if (!currentSessionId) {
+          console.error("No session ID available");
+          document.getElementById("status").textContent = "Please upload a document first";
+          return;
+        }
+
         // ws = new WebSocket("wss://v2vrag.onrender.com/ws/audio-query");
         ws = new WebSocket("ws://localhost:8000/ws/audio-query");
         ws.onopen = () => {
@@ -168,7 +201,10 @@
             reader.onloadend = () => {
               const base64Audio = reader.result.split(",")[1];
               if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(base64Audio);
+                ws.send(JSON.stringify({
+                  query: base64Audio,
+                  session_id: currentSessionId
+                }));
               }
             };
             audioChunks = [];
@@ -247,6 +283,8 @@
           const fileInput = document.getElementById("fileInput");
           const userPrompt = document.getElementById("userPrompt").value;
           const uploadStatus = document.getElementById("uploadStatus");
+          const modelSelect = document.getElementById("modelSelect");
+          const embeddingSelect = document.getElementById("embeddingSelect");
 
           if (!fileInput.files.length) {
             uploadStatus.textContent = "Please select a file first";
@@ -257,27 +295,45 @@
           const formData = new FormData();
           formData.append("file", file);
           formData.append("user_prompt", userPrompt);
-
+          formData.append("model", modelSelect.value);
+          formData.append("embeddings", embeddingSelect.value);
+          
           try {
             uploadStatus.textContent = "Uploading...";
             // const response = await fetch("https://v2vrag.onrender.com/upload", {
-            //   method: "POST",
-            //   body: formData,
-            // });
             const response = await fetch("http://localhost:8000/upload", {
               method: "POST",
               body: formData,
             });
+            
+            const result = await response.json();
+            
             if (!response.ok) {
-              throw new Error(`HTTP error! status: ${response.status}`);
+              throw new Error(result.detail || `HTTP error! status: ${response.status}`);
             }
 
-            const result = await response.json();
-            uploadStatus.textContent = "Upload successful!";
+            if (!result.session_id) {
+              throw new Error("No session ID received from server");
+            }
+
+            currentSessionId = result.session_id;
+            uploadStatus.textContent = "Upload successful! Session ID: " + currentSessionId;
             console.log("Upload result:", result);
+            
+            // Initialize WebSocket with new session ID
+            if (ws) {
+              ws.close();
+            }
+            initWebSocket();
           } catch (error) {
             console.error("Upload error:", error);
-            uploadStatus.textContent = "Upload failed: " + error.message;
+            uploadStatus.textContent = "Upload failed: " + (error.message || "Unknown error occurred");
+            // Reset session ID on error
+            currentSessionId = null;
+            if (ws) {
+              ws.close();
+              ws = null;
+            }
           }
         });
     </script>

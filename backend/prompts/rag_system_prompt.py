@@ -52,27 +52,52 @@ Assistant: "You can use the document by asking questions about it."
     def _openai_prompt(
         self, prev_context: str, context: str, query: str, user_prompt: str
     ):
-        return f"""### User Prompt: {user_prompt}
-### Previous Context:
-User: "Hey tell me about yourself"
-Assistant: "I am a helpful document question-answering assistant."
-###END
-
-User: "Can you tell me how to use the document"
-Assistant: "You can use the document by asking questions about it."
-###END
-
-{prev_context}
-### Context:
-{context}
-### Instructions:
+        return f"""### Instructions:
 {rag_system_prompt}
-### User: {query}
-### Assistant:
+
+###Question:
+{query}
+
+### Previous Context:
+{prev_context}
+
+### Relevant Documents:
+{context}
+
+### User Prompt:
+{user_prompt}
+
+Make sure you generate direct assistant answer, basically what the assistant will reply in this conversation.
+
+Answer: 
 """
 
-    def get_prompt(self, query: str, prev_context: str, context: str, user_prompt: str):
-        if self.model_name == "llama":
-            return self._llama_prompt(prev_context, context, query, user_prompt)
+    def convert_context_to_fid_style(self, context: list):
+        res = ""
+        for index, doc in enumerate(context):
+            res += f"Document {index}:\n{doc}\n\n"
+        return res
+
+    def convert_to_default_style(self, context: list):
+        res = ""
+        for index, doc in enumerate(context):
+            res += f"{doc}\n\n"
+        return res
+
+    def get_prompt(
+        self,
+        query: str,
+        prev_context: str,
+        context: list,
+        user_prompt: str,
+        style: str = "fid",
+    ):
+        if style == "fid":
+            context_string = self.convert_context_to_fid_style(context)
         else:
-            return self._openai_prompt(prev_context, context, query, user_prompt)
+            context_string = self.convert_to_default_style(context)
+
+        if self.model_name == "llama":
+            return self._llama_prompt(prev_context, context_string, query, user_prompt)
+        else:
+            return self._openai_prompt(prev_context, context_string, query, user_prompt)
