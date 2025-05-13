@@ -61,6 +61,7 @@ async def upload_file(
     model: str = Form("openai"),
     embeddings: str = Form("openai"),
     user_prompt: str = Form(""),
+    query_language: str = Form("english"),
 ):
     try:
         # Generate a unique session ID
@@ -78,7 +79,9 @@ async def upload_file(
         cleanup_expired_sessions()
 
         file_content = await file.read()
-        rag_services[session_id].process_file(file_content, file.filename, user_prompt)
+        rag_services[session_id].process_file(
+            file_content, file.filename, user_prompt, query_language
+        )
         return {"message": "File processed successfully", "session_id": session_id}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

@@ -73,7 +73,7 @@ class RAGService:
             raise ValueError(f"Failed to extract text from PDF: {str(e)}")
 
     def process_file(
-        self, file_content: bytes, filename: str, user_prompt: str
+        self, file_content: bytes, filename: str, user_prompt: str, query_language: str
     ) -> None:
         """Process a file and create vector store with proper error handling."""
         try:
@@ -93,6 +93,7 @@ class RAGService:
                     content = file_content.decode("latin-1")
             self.user_prompt = user_prompt
             self.generate_vector_store(content, filename)
+            self.query_language = query_language
         except Exception as e:
             raise ValueError(f"Failed to process file {filename}: {str(e)}")
 
@@ -152,7 +153,12 @@ class RAGService:
                 )
 
             prompt = self.system_prompt.get_prompt(
-                query, prev_context_text, context, self.user_prompt, style="fid"
+                query,
+                prev_context_text,
+                context,
+                self.user_prompt,
+                style="fid",
+                query_language=self.query_language,
             )
             logger.info(f"Prompt: {prompt}")
             return prompt

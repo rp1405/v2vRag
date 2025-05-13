@@ -27,7 +27,12 @@ class SystemPrompt:
         self.model_name = model_name
 
     def _llama_prompt(
-        self, prev_context: str, context: str, query: str, user_prompt: str
+        self,
+        prev_context: str,
+        context: str,
+        query: str,
+        user_prompt: str,
+        query_language: str,
     ):
         return f"""### User Prompt: {user_prompt}
 ### Context:
@@ -45,12 +50,18 @@ Assistant: "You can use the document by asking questions about it."
 
 {prev_context}
 
+You should answer in {query_language} language.
 ### User: {query}
 ### Assistant:
 """
 
     def _openai_prompt(
-        self, prev_context: str, context: str, query: str, user_prompt: str
+        self,
+        prev_context: str,
+        context: str,
+        query: str,
+        user_prompt: str,
+        query_language: str,
     ):
         return f"""### Instructions:
 {rag_system_prompt}
@@ -68,7 +79,7 @@ Assistant: "You can use the document by asking questions about it."
 {user_prompt}
 
 Make sure you generate direct assistant answer, basically what the assistant will reply in this conversation.
-
+You should answer in {query_language} language.
 Answer: 
 """
 
@@ -91,6 +102,7 @@ Answer:
         context: list,
         user_prompt: str,
         style: str = "fid",
+        query_language: str = "english",
     ):
         if style == "fid":
             context_string = self.convert_context_to_fid_style(context)
@@ -98,6 +110,10 @@ Answer:
             context_string = self.convert_to_default_style(context)
 
         if self.model_name == "llama":
-            return self._llama_prompt(prev_context, context_string, query, user_prompt)
+            return self._llama_prompt(
+                prev_context, context_string, query, user_prompt, query_language
+            )
         else:
-            return self._openai_prompt(prev_context, context_string, query, user_prompt)
+            return self._openai_prompt(
+                prev_context, context_string, query, user_prompt, query_language
+            )
