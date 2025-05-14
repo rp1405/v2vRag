@@ -68,7 +68,9 @@ async def upload_file(
         session_id = str(uuid.uuid4())
 
         # Create new RAG service for this session
-        rag_services[session_id] = RAGService(embeddings=embeddings, llm=model)
+        rag_services[session_id] = RAGService(
+            embeddings=embeddings, llm=model, query_language=query_language
+        )
 
         # Set session expiration
         session_expirations[session_id] = datetime.now() + timedelta(
@@ -79,9 +81,7 @@ async def upload_file(
         cleanup_expired_sessions()
 
         file_content = await file.read()
-        rag_services[session_id].process_file(
-            file_content, file.filename, user_prompt, query_language
-        )
+        rag_services[session_id].process_file(file_content, file.filename, user_prompt)
         return {"message": "File processed successfully", "session_id": session_id}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -92,6 +92,7 @@ class ScrapeRequest(BaseModel):
     embeddings: str
     model: str
     user_prompt: str = ""
+    query_language: str = "english"
 
 
 @app.post("/scrape")
@@ -106,7 +107,9 @@ async def scrape_url(body: ScrapeRequest):
 
         # Create new RAG service for this session
         rag_services[session_id] = RAGService(
-            embeddings=body.embeddings, llm=body.model
+            embeddings=body.embeddings,
+            llm=body.model,
+            query_language=body.query_language,
         )
 
         # Set session expiration

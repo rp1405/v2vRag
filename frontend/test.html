@@ -208,6 +208,113 @@
         background-color: var(--accent-hover);
       }
 
+      /* New styles for toggle and URL form - only additions */
+      .toggle-container {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+        margin-bottom: 1.5rem;
+      }
+
+      .toggle-switch {
+        position: relative;
+        display: inline-block;
+        width: 60px;
+        height: 34px;
+      }
+
+      .toggle-switch input {
+        opacity: 0;
+        width: 0;
+        height: 0;
+      }
+
+      .toggle-slider {
+        position: absolute;
+        cursor: pointer;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background-color: var(--input-bg);
+        transition: .4s;
+        border-radius: 34px;
+      }
+
+      .toggle-slider:before {
+        position: absolute;
+        content: "";
+        height: 26px;
+        width: 26px;
+        left: 4px;
+        bottom: 4px;
+        background-color: white;
+        transition: .4s;
+        border-radius: 50%;
+      }
+
+      input:checked + .toggle-slider {
+        background-color: var(--accent-primary);
+      }
+
+      input:checked + .toggle-slider:before {
+        transform: translateX(26px);
+      }
+
+      .toggle-label {
+        color: var(--text-primary);
+        font-weight: 500;
+      }
+
+      .form-container {
+        display: none;
+      }
+
+      .form-container.active {
+        display: flex;
+        flex-direction: column;
+        gap: 1rem;
+      }
+
+      #urlInput {
+        width: 100%;
+        padding: 0.75rem;
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        background-color: var(--input-bg);
+        color: var(--text-primary);
+        font-family: 'Poppins', sans-serif;
+        font-size: 1rem;
+        margin-bottom: 1rem;
+      }
+
+      #urlInput:focus {
+        outline: none;
+        border-color: var(--accent-primary);
+        box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.2);
+      }
+
+      #urlUserPrompt {
+        width: 100%;
+        min-height: 120px;
+        padding: 1rem;
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        background-color: var(--input-bg);
+        color: var(--text-primary);
+        font-family: 'Poppins', sans-serif;
+        font-size: 1rem;
+        resize: vertical;
+        transition: all 0.3s ease;
+        margin-bottom: 1rem;
+      }
+
+      #urlUserPrompt:focus {
+        outline: none;
+        border-color: var(--accent-primary);
+        box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.2);
+      }
+
       .audio-section {
         margin-bottom: 2rem;
         padding: 2rem;
@@ -253,7 +360,16 @@
 
       <!-- File Upload Section -->
       <div class="upload-section">
-        <h2>Upload Document</h2>
+        <h2>Document Input</h2>
+        <div class="toggle-container">
+          <span class="toggle-label">File Upload</span>
+          <label class="toggle-switch">
+            <input type="checkbox" id="inputToggle">
+            <span class="toggle-slider"></span>
+          </label>
+          <span class="toggle-label">URL Scrape</span>
+        </div>
+
         <div class="upload-controls">
           <div class="model-selection">
             <div>
@@ -281,12 +397,26 @@
               </select>
             </div>
           </div>
-          <input type="file" id="fileInput" accept=".pdf,.doc,.docx,.txt" />
-          <textarea
-            id="userPrompt"
-            placeholder="Enter any specific instructions or context for the document..."
-          ></textarea>
-          <button id="uploadButton">Upload Document</button>
+
+          <!-- File Upload Form -->
+          <div id="fileUploadForm" class="form-container active">
+            <input type="file" id="fileInput" accept=".pdf,.doc,.docx,.txt" />
+            <textarea
+              id="userPrompt"
+              placeholder="Enter any specific instructions or context for the document..."
+            ></textarea>
+            <button id="uploadButton">Upload Document</button>
+          </div>
+
+          <!-- URL Scrape Form -->
+          <div id="urlScrapeForm" class="form-container">
+            <input type="url" id="urlInput" placeholder="Enter URL to scrape..." />
+            <textarea
+              id="urlUserPrompt"
+              placeholder="Enter any specific instructions or context for the URL content..."
+            ></textarea>
+            <button id="scrapeButton">Scrape URL</button>
+          </div>
         </div>
         <div id="uploadStatus" class="status"></div>
       </div>
@@ -452,6 +582,81 @@
         document
           .getElementById("recordButton")
           .addEventListener("click", toggleRecording);
+
+        // Add toggle functionality
+        const inputToggle = document.getElementById("inputToggle");
+        const fileUploadForm = document.getElementById("fileUploadForm");
+        const urlScrapeForm = document.getElementById("urlScrapeForm");
+        const uploadStatus = document.getElementById("uploadStatus");
+
+        inputToggle.addEventListener("change", () => {
+          if (inputToggle.checked) {
+            fileUploadForm.classList.remove("active");
+            urlScrapeForm.classList.add("active");
+          } else {
+            fileUploadForm.classList.add("active");
+            urlScrapeForm.classList.remove("active");
+          }
+        });
+
+        // Add URL scraping functionality
+        document.getElementById("scrapeButton").addEventListener("click", async () => {
+          const urlInput = document.getElementById("urlInput");
+          const userPrompt = document.getElementById("urlUserPrompt").value;
+          const modelSelect = document.getElementById("modelSelect");
+          const embeddingSelect = document.getElementById("embeddingSelect");
+          const queryLanguageSelect = document.getElementById("queryLanguageSelect");
+
+          if (!urlInput.value) {
+            uploadStatus.textContent = "Please enter a URL";
+            return;
+          }
+
+          try {
+            uploadStatus.textContent = "Scraping URL...";
+            const response = await fetch("http://localhost:8000/scrape", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                url: urlInput.value,
+                user_prompt: userPrompt,
+                model: modelSelect.value,
+                embeddings: embeddingSelect.value,
+                query_language: queryLanguageSelect.value,
+              }),
+            });
+
+            const result = await response.json();
+
+            if (!response.ok) {
+              throw new Error(result.detail || `HTTP error! status: ${response.status}`);
+            }
+
+            if (!result.session_id) {
+              throw new Error("No session ID received from server");
+            }
+
+            currentSessionId = result.session_id;
+            uploadStatus.textContent = "URL scraped successfully! Session ID: " + currentSessionId;
+            console.log("Scrape result:", result);
+
+            // Initialize WebSocket with new session ID
+            if (ws) {
+              ws.close();
+            }
+            initWebSocket();
+          } catch (error) {
+            console.error("Scrape error:", error);
+            uploadStatus.textContent = "Scraping failed: " + (error.message || "Unknown error occurred");
+            currentSessionId = null;
+            if (ws) {
+              ws.close();
+              ws = null;
+            }
+          }
+        });
       });
 
       // File Upload Handling

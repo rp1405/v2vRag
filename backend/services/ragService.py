@@ -17,6 +17,8 @@ from loguru import logger
 import time
 from services.namedEntityService import NamedEntityService
 from datetime import datetime
+from docx import Document  # Add this import for DOCX support
+import pdfplumber
 
 
 class DocumentContext:
@@ -27,7 +29,13 @@ class DocumentContext:
 
 
 class RAGService:
-    def __init__(self, embeddings: str, llm: str, chunk_size: int = 50):
+    def __init__(
+        self,
+        embeddings: str,
+        llm: str,
+        chunk_size: int = 50,
+        query_language: str = "english",
+    ):
         self.vector_store: Optional[Chroma] = None
         self.embeddings = EmbeddingsFactory(embeddings).get_embeddings()
         self.llm = LLMFactory(llm).get_llm()
@@ -39,6 +47,7 @@ class RAGService:
         self.model_name = llm
         self.ner_service = NamedEntityService()
         self.chunks = []
+        self.query_language = query_language
 
     def _fix_leading_punctuation(self, chunks):
         fixed_chunks = []
@@ -60,6 +69,80 @@ class RAGService:
         finally:
             file_handle.close()
 
+    def format_table_as_markdown(self, table, headers=None):
+        """Format a table as markdown string"""
+        if not table:
+            return ""
+
+        # Replace None with empty strings
+        cleaned_table = [
+            [cell.strip() if cell else "" for cell in row] for row in table
+        ]
+
+        # Use first row as header if not provided
+        if not headers:
+            headers = cleaned_table[0]
+            rows = cleaned_table[1:]
+        else:
+            rows = cleaned_table
+
+        # Normalize multi-line headers and cells
+        headers = [" ".join(col.split()) for col in headers]
+        rows = [[" ".join(cell.split()) for cell in row] for row in rows]
+
+        # Build Markdown table
+        markdown = "| " + " | ".join(headers) + " |\n"
+        markdown += "| " + " | ".join(["---"] * len(headers)) + " |\n"
+        for row in rows:
+            # pad row to match header length
+            padded_row = row + [""] * (len(headers) - len(row))
+            markdown += "| " + " | ".join(padded_row) + " |\n"
+        return markdown
+
+    def extract_pdf_text_with_tables(self, pdf_content):
+        """Extract text and tables from PDF content using pdfplumber"""
+        try:
+            pdf_file = io.BytesIO(pdf_content)
+            processed_tables = set()  # Keep track of processed tables
+            all_content = []
+
+            with pdfplumber.open(pdf_file) as pdf:
+                for page in pdf.pages:
+                    page_content = []
+
+                    # Extract tables first
+                    tables = page.extract_tables()
+                    for table in tables:
+                        if not table:  # Skip empty tables
+                            continue
+
+                        # Create a string representation of the table for deduplication
+                        table_str = str(table)
+                        if table_str not in processed_tables:
+                            processed_tables.add(table_str)
+                            markdown_table = self.format_table_as_markdown(table)
+                            if markdown_table.strip():  # Only add non-empty tables
+                                page_content.append(("table", markdown_table))
+
+                    # Extract text after tables
+                    page_text = page.extract_text() or ""
+                    if page_text.strip():
+                        page_content.append(("text", page_text))
+
+                    # Sort content to maintain original order (tables followed by text)
+                    page_content.sort(key=lambda x: x[0] != "table")
+
+                    # Add page content to main content list
+                    all_content.extend([content for _, content in page_content])
+
+            # Join all content with appropriate spacing
+            final_text = "\n".join(all_content)
+            logger.info("Successfully extracted text and tables from PDF")
+            return final_text.strip()
+        except Exception as e:
+            logger.error(f"Error extracting text from PDF: {e}")
+            return ""
+
     def extract_text_from_pdf(self, file_content: bytes) -> str:
         """Extract text from PDF content with proper error handling."""
         try:
@@ -72,8 +155,72 @@ class RAGService:
         except Exception as e:
             raise ValueError(f"Failed to extract text from PDF: {str(e)}")
 
+    def extract_text_from_docx(self, file_content: bytes) -> str:
+        """Extract text and tables from DOCX content with proper error handling."""
+        try:
+            with self._safe_file_handle(file_content) as docx_file:
+                doc = Document(docx_file)
+                all_content = []
+
+                # Process paragraphs and tables in order
+                for element in doc.element.body:
+                    if element.tag.endswith("p"):  # Paragraph
+                        paragraph = doc.paragraphs[len(all_content)]
+                        text = paragraph.text.strip()
+                        if text:
+                            all_content.append(("text", text))
+                    elif element.tag.endswith("tbl"):  # Table
+                        # Find the table index
+                        table_index = (
+                            len(
+                                [
+                                    t
+                                    for t in doc.tables
+                                    if t._element is element
+                                    or t._element in element.iter()
+                                ]
+                            )
+                            - 1
+                        )
+                        if table_index >= 0:
+                            table = doc.tables[table_index]
+                            if table.rows:
+                                # Extract headers from first row
+                                headers = [
+                                    cell.text.strip() for cell in table.rows[0].cells
+                                ]
+                                # Extract data rows
+                                rows = []
+                                for row in table.rows[1:]:
+                                    row_data = [cell.text.strip() for cell in row.cells]
+                                    if any(row_data):  # Only add non-empty rows
+                                        rows.append(row_data)
+
+                                if (
+                                    headers and rows
+                                ):  # Only process if we have both headers and data
+                                    markdown_table = self.format_table_as_markdown(
+                                        rows, headers
+                                    )
+                                    if markdown_table.strip():
+                                        all_content.append(("table", markdown_table))
+
+                # Join all content with appropriate spacing
+                final_text = []
+                for content_type, content in all_content:
+                    if content_type == "table":
+                        final_text.append(
+                            "\n" + content + "\n"
+                        )  # Add extra newlines around tables
+                    else:
+                        final_text.append(content)
+
+                return "\n".join(final_text).strip()
+        except Exception as e:
+            raise ValueError(f"Failed to extract text from DOCX: {str(e)}")
+
     def process_file(
-        self, file_content: bytes, filename: str, user_prompt: str, query_language: str
+        self, file_content: bytes, filename: str, user_prompt: str
     ) -> None:
         """Process a file and create vector store with proper error handling."""
         try:
@@ -82,7 +229,15 @@ class RAGService:
                 self.vector_store = None
 
             if filename.lower().endswith(".pdf"):
-                content = self.extract_text_from_pdf(file_content)
+                content = self.extract_pdf_text_with_tables(file_content)
+                if not content.strip():
+                    # Fallback to basic extraction if table-aware extraction fails
+                    content = self.extract_text_from_pdf(file_content)
+            elif filename.lower().endswith(".docx"):
+                content = self.extract_text_from_docx(file_content)
+                if not content.strip():
+                    # Fallback to basic extraction if table-aware extraction fails
+                    content = self.extract_text_from_pdf(file_content)
             else:
                 encoding = chardet.detect(file_content)["encoding"]
                 if not encoding:
@@ -93,20 +248,29 @@ class RAGService:
                     content = file_content.decode("latin-1")
             self.user_prompt = user_prompt
             self.generate_vector_store(content, filename)
-            self.query_language = query_language
         except Exception as e:
             raise ValueError(f"Failed to process file {filename}: {str(e)}")
 
     def generate_vector_store(self, content: str, filename: str = "default") -> None:
         try:
+            # Adjust chunk size and overlap for better table handling
             text_splitter = RecursiveCharacterTextSplitter(
                 chunk_size=1000,
                 chunk_overlap=100,
                 length_function=len,
-                separators=["\n\n", "\n", ".", "?", "!"],
+                separators=[
+                    "\n\n",
+                    "\n",
+                    ".",
+                    "?",
+                    "!",
+                    "|",
+                ],  # Added | as separator for tables
             )
             chunks = text_splitter.split_text(content)
             chunks = self._fix_leading_punctuation(chunks)
+            # Filter out empty chunks and normalize whitespace
+            chunks = [chunk.strip() for chunk in chunks if chunk.strip()]
             self.chunks = chunks
             logger.info(f"Using embedding: {self.embeddings}")
             # Create a new vector store with a unique collection name

@@ -8,6 +8,7 @@ from collections import deque
 import mimetypes
 import io
 from PyPDF2 import PdfReader
+import pdfplumber
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -57,6 +58,80 @@ class WebScraper:
             logger.error(f"Error extracting text from PDF: {e}")
             return ""
 
+    def format_table_as_markdown(self, table, headers=None):
+        """Format a table as markdown string"""
+        if not table:
+            return ""
+
+        # Replace None with empty strings
+        cleaned_table = [
+            [cell.strip() if cell else "" for cell in row] for row in table
+        ]
+
+        # Use first row as header if not provided
+        if not headers:
+            headers = cleaned_table[0]
+            rows = cleaned_table[1:]
+        else:
+            rows = cleaned_table
+
+        # Normalize multi-line headers and cells
+        headers = [" ".join(col.split()) for col in headers]
+        rows = [[" ".join(cell.split()) for cell in row] for row in rows]
+
+        # Build Markdown table
+        markdown = "| " + " | ".join(headers) + " |\n"
+        markdown += "| " + " | ".join(["---"] * len(headers)) + " |\n"
+        for row in rows:
+            # pad row to match header length
+            padded_row = row + [""] * (len(headers) - len(row))
+            markdown += "| " + " | ".join(padded_row) + " |\n"
+        return markdown
+
+    def extract_pdf_text_with_tables(self, pdf_content):
+        """Extract text and tables from PDF content using pdfplumber"""
+        try:
+            pdf_file = io.BytesIO(pdf_content)
+            processed_tables = set()  # Keep track of processed tables
+            all_content = []
+
+            with pdfplumber.open(pdf_file) as pdf:
+                for page in pdf.pages:
+                    page_content = []
+
+                    # Extract tables first
+                    tables = page.extract_tables()
+                    for table in tables:
+                        if not table:  # Skip empty tables
+                            continue
+
+                        # Create a string representation of the table for deduplication
+                        table_str = str(table)
+                        if table_str not in processed_tables:
+                            processed_tables.add(table_str)
+                            markdown_table = self.format_table_as_markdown(table)
+                            if markdown_table.strip():  # Only add non-empty tables
+                                page_content.append(("table", markdown_table))
+
+                    # Extract text after tables
+                    page_text = page.extract_text() or ""
+                    if page_text.strip():
+                        page_content.append(("text", page_text))
+
+                    # Sort content to maintain original order (tables followed by text)
+                    page_content.sort(key=lambda x: x[0] != "table")
+
+                    # Add page content to main content list
+                    all_content.extend([content for _, content in page_content])
+
+            # Join all content with appropriate spacing
+            final_text = "\n".join(all_content)
+            logger.info("Successfully extracted text and tables from PDF")
+            return final_text.strip()
+        except Exception as e:
+            logger.error(f"Error extracting text from PDF: {e}")
+            return ""
+
     def get_page(self, url):
         """Fetch a page and return its content"""
         try:
@@ -70,7 +145,7 @@ class WebScraper:
             content_type = response.headers.get("content-type", "").lower()
             if "application/pdf" in content_type or self.is_pdf_url(url):
                 logger.info(f"Processing PDF file: {url}")
-                return self.extract_pdf_text(response.content)
+                return self.extract_pdf_text_with_tables(response.content)
 
             return response.text
         except requests.RequestException as e:

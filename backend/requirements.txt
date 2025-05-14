@@ -236,3 +236,4 @@ wsproto==1.2.0
 xxhash==3.5.0
 yarl==1.20.0
 zipp==3.21.0
+python-docx>=0.8.11  # For DOCX file processing
